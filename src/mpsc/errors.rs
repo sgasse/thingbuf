@@ -35,13 +35,14 @@ pub enum TryRecvError {
 }
 
 /// Error returned by [`Sender::send`] or [`Sender::send_ref`] (and
-/// [`StaticSender::send`]/[`StaticSender::send_ref`]), if the
-/// [`Receiver`] half of the channel has been dropped.
+/// [`StaticSender::send`]/[`StaticSender::send_ref`]/[`PollSender::Send`]),
+/// if the [`Receiver`] half of the channel has been dropped.
 ///
 /// [`Sender::send`]: super::Sender::send
 /// [`Sender::send_ref`]: super::Sender::send_ref
 /// [`StaticSender::send`]: super::StaticSender::send
 /// [`StaticSender::send_ref`]: super::StaticSender::send_ref
+/// [`PollSender::send`]: super::PollSender::send
 /// [`Receiver`]: super::Receiver
 #[derive(PartialEq, Eq)]
 pub struct Closed<T = ()>(pub(crate) T);
