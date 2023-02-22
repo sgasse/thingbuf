@@ -23,7 +23,7 @@ exclude = ["/.github", "/.cargo", "/bin", "/bench", "/assets"]
 [features]
 std = ["alloc", "parking_lot"]
 alloc = []
-default = ["std"]
+default = ["std", "stream"]
 static = []
 stream = ["futures"]
 

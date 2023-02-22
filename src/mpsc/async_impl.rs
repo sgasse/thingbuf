@@ -296,38 +296,33 @@ feature! {
 
         /// A wrapper around mpsc::Sender that can be polled.
         pub struct PollSender<'a, T, R> {
-            sender: Option<Sender<T, R>>,
+            sender: &'a Sender<T, R>,
             state: PollSenderState<'a, T, R>,
         }
 
         impl<'a, T, R> PollSender<'a, T, R> where R: 'a + Recycle<T>, T: 'a {
             /// Creates a new `PollSender`.
-            pub fn new(sender: Sender<T, R>) -> PollSender<'a, T, R> {
+            pub fn new(sender: &'a mut Sender<T, R>) -> PollSender<'a, T, R> {
                 PollSender {
-                    sender: Some(sender),
+                    sender,
                     state: PollSenderState::Idle,
                 }
             }
 
-            pub fn poll_reserve(&'a mut self, cx: &mut Context<'_>) -> Poll<Result<(), Closed>> {
+            pub fn poll_reserve(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Closed>> {
                 loop {
                     let (result, next_state) = match mem::replace(&mut self.state, PollSenderState::Closed) {
                         PollSenderState::Idle => {
-                            match self.sender.as_ref() {
-                                Some(sender) => {
-                                    let send_ref = Box::pin(SendRefFuture {
-                                        core: &sender.inner.core,
-                                        slots: sender.inner.slots.as_ref(),
-                                        recycle: &sender.inner.recycle,
-                                        state: State::Start,
-                                        waiter: queue::Waiter::new(),
-                                    });
-                                    // Start trying to acquire a permit to reserve a slot for our send, and
-                                    // immediately loop back around to poll it the first time.
-                                    (None, PollSenderState::Acquiring(send_ref))
-                                }
-                                None => (Some(Poll::Ready(Err(Closed(())))), PollSenderState::Closed)
-                            }
+                                let send_ref = Box::pin(SendRefFuture {
+                                    core: &self.sender.inner.core,
+                                    slots: &self.sender.inner.slots.as_ref(),
+                                    recycle: &self.sender.inner.recycle,
+                                    state: State::Start,
+                                    waiter: queue::Waiter::new(),
+                                });
+                                // Start trying to acquire a permit to reserve a slot for our send, and
+                                // immediately loop back around to poll it the first time.
+                                (None, PollSenderState::Acquiring(send_ref))
                         }
                         PollSenderState::Acquiring(mut f) => match f.as_mut().poll(cx) {
                             // Channel has capacity.
@@ -373,21 +368,14 @@ feature! {
                     // We have a permit to send our item, so go ahead, which gets us our sender back.
                     PollSenderState::ReadyToSend(mut send_ref) => {
                         *send_ref = value;
-                        match &self.sender {
-                            Some(_) => (Ok(()), PollSenderState::<T, R>::Idle),
-                            None => (Ok(()), PollSenderState::Closed), // Closed in between.
-                        }
+                        (Ok(()), PollSenderState::<T, R>::Idle)
                     },
                     // We're closed, either by choice or because the underlying sender was closed.
                     PollSenderState::Closed => (Err(Closed(value)), PollSenderState::Closed),
                 };
 
                 // Handle deferred closing if `close` was called between `poll_reserve` and `send_item`.
-                self.state = if self.sender.is_some() {
-                    next_state
-                } else {
-                    PollSenderState::Closed
-                };
+                self.state = next_state;
 
                 result
             }
@@ -396,15 +384,15 @@ feature! {
             ///
             /// The underlying channel that this sender was wrapping may still be open.
             pub fn is_closed(&'a self) -> bool {
-                matches!(self.state, PollSenderState::Closed) || self.sender.is_none()
+                matches!(self.state, PollSenderState::Closed)
             }
 
             /// Gets a reference to the `Sender` of the underlying channel.
             ///
             /// If `PollSender` has been closed, `None` is returned. The underlying channel that this sender
             /// was wrapping may still be open.
-            pub fn get_ref(&self) -> Option<&Sender<T, R>> {
-                self.sender.as_ref()
+            pub fn get_ref(&self) -> &Sender<T, R> {
+                &self.sender
             }
 
             /// Closes this sender.
@@ -412,8 +400,6 @@ feature! {
             /// No more messages will be able to be sent from this sender, but the underlying channel will
             /// remain open until all senders have dropped, or until the [`Receiver`] closes the channel.
             pub fn close(&mut self) {
-                // Mark ourselves officially closed by dropping our main sender.
-                self.sender = None;
                 self.state = PollSenderState::Closed;
             }
         }
