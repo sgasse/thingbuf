@@ -96,6 +96,10 @@ feature! {
         /// methods for receiving from the channel, this allows allocations for
         /// channel messages to be reused in place.
         ///
+        /// Note that the [`Receiver`] will not continue to produce items until
+        /// the [`SendRef`] is dropped, even if other items are sent
+        /// successfully afterwards. For details, take a look at [`SendRef`].
+        ///
         /// # Errors
         ///
         /// If the [`Receiver`] end of the channel has been dropped, this
@@ -1791,6 +1795,45 @@ impl_send_ref! {
     /// writing to that element. This is analogous to the [`Ref`] type, except
     /// that it completes a `send_ref` or `try_send_ref` operation when it is
     /// dropped.
+    ///
+    /// Note that elements are received in the order in which `SendRef`s are
+    /// created, **not** in the order in which they are dropped. A few
+    /// implications follow:
+    ///  - If you create two `SendRef`s and drop the second one before the first
+    ///    one, the `Receiver` will still produce the first item first.
+    ///  - If you create and hold on to a `SendRef`, no element successfully
+    ///    sent afterwards will be received until the `SendRef` is dropped.
+    ///
+    /// ```rust
+    /// # tokio_test::block_on(async {
+    /// let (tx, rx) = thingbuf::mpsc::channel(10);
+
+    /// let handle = tokio::spawn(async move {
+    ///     let start = std::time::Instant::now();
+    ///
+    ///     let first_item = rx.recv().await.unwrap();
+    ///     assert!(start.elapsed() >= std::time::Duration::from_secs(1));
+    ///     assert_eq!(first_item, String::from("sent_second"));
+    ///
+    ///     let second_item = rx.recv().await.unwrap();
+    ///     assert!(start.elapsed() >= std::time::Duration::from_secs(1));
+    ///     assert_eq!(second_item, String::from("sent_first"));
+    /// });
+    ///
+    /// let mut slot = tx.send_ref().await.unwrap();
+    ///
+    /// // Send first element
+    /// tx.send(String::from("sent_first")).await.unwrap();
+    ///
+    /// tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    ///
+    /// // Send second element
+    /// *slot = String::from("sent_second");
+    /// drop(slot);
+    ///
+    /// assert!(handle.await.is_ok());
+    /// # })
+    /// ```
     ///
     /// This type is returned by the [`Sender::send_ref`] and
     /// [`Sender::try_send_ref`] (or [`StaticSender::send_ref`] and
